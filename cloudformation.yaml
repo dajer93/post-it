@@ -1,0 +1,332 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for Post-it application with EC2, DynamoDB, and S3'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name that is prefixed to resource names
+    Type: String
+    Default: Post-it
+  
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+      - t3.medium
+    ConstraintDescription: Must be a valid EC2 instance type.
+  
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+  
+  SSHLocation:
+    Description: The IP address range that can SSH to the EC2 instances
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: Must be a valid IP CIDR range of the form x.x.x.x/x.
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-0f34c5ae932e6f0e4
+    us-east-2:
+      AMI: ami-02a89066c48741345
+    us-west-1:
+      AMI: ami-09e595a8b92f09f89
+    us-west-2:
+      AMI: ami-0735c191cf914754d
+    eu-west-1:
+      AMI: ami-0eb11ab33f229b26c
+    eu-central-1:
+      AMI: ami-0faab6bdbac9486fb
+    ap-northeast-1:
+      AMI: ami-0e725d9b5f9363b0a
+    ap-southeast-1:
+      AMI: ami-0b8b85d9645465073
+    ap-southeast-2:
+      AMI: ami-0a1a6462fdc8dee9c
+
+Resources:
+  # VPC and Networking
+  PostItVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} IGW
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref PostItVPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PostItVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet 1
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PostItVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  # Security Groups
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP/HTTPS and SSH
+      VpcId: !Ref PostItVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+
+  # IAM Role for EC2
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # DynamoDB Tables
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: PostIt-Users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: EmailIndex
+          KeySchema:
+            - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  MessagesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: PostIt-Messages
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: messageId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: N
+      KeySchema:
+        - AttributeName: messageId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UserMessages
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # S3 Bucket for Profile Images
+  ProfileImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-profile-images-${AWS::AccountId}
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedOrigins:
+              - '*'
+            MaxAge: 3000
+
+  # EC2 Instance
+  AppServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+        - !Ref ServerSecurityGroup
+      KeyName: !Ref KeyName
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Server
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update with latest packages
+          dnf update -y
+          dnf install -y git nodejs npm mongodb-org nginx
+
+          # Install certbot
+          dnf install -y python3-pip
+          pip3 install certbot certbot-nginx
+
+          # Install PM2
+          npm install -g pm2
+
+          # Clone the repository
+          mkdir -p /app
+          cd /app
+          git clone https://github.com/your-username/post-it.git .
+
+          # Install server dependencies
+          cd /app/server
+          npm install
+
+          # Configure environment variables
+          cat > /app/server/.env << EOL
+          PORT=3000
+          MONGODB_URI=mongodb://localhost:27017/postit
+          JWT_SECRET=${AWS::StackName}-jwt-secret
+          NODE_ENV=production
+          AWS_REGION=${AWS::Region}
+          PROFILE_BUCKET=${ProfileImagesBucket}
+          DYNAMO_USERS_TABLE=${UsersTable}
+          DYNAMO_MESSAGES_TABLE=${MessagesTable}
+          EOL
+
+          # Start MongoDB and enable it to launch on startup
+          systemctl start mongod
+          systemctl enable mongod
+
+          # Start the server with PM2
+          cd /app/server
+          pm2 start src/index.js --name "postit-server"
+          pm2 startup
+          pm2 save
+
+          # Configure Nginx as reverse proxy
+          cat > /etc/nginx/conf.d/postit.conf << EOL
+          server {
+            listen 80;
+            server_name _;
+
+            location / {
+              proxy_pass http://localhost:3000;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade \$http_upgrade;
+              proxy_set_header Connection 'upgrade';
+              proxy_set_header Host \$host;
+              proxy_cache_bypass \$http_upgrade;
+            }
+          }
+          EOL
+
+          # Enable the Nginx site and restart
+          systemctl enable nginx
+          systemctl restart nginx
+
+Outputs:
+  ServerPublicIP:
+    Description: Public IP address of the server
+    Value: !GetAtt AppServer.PublicIp
+    Export:
+      Name: !Sub "${AWS::StackName}-ServerIP"
+
+  ServerPublicDNS:
+    Description: Public DNS name of the server
+    Value: !GetAtt AppServer.PublicDnsName
+    Export:
+      Name: !Sub "${AWS::StackName}-ServerDNS"
+
+  UsersTableArn:
+    Description: ARN of the Users DynamoDB table
+    Value: !GetAtt UsersTable.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-UsersTableArn"
+
+  MessagesTableArn:
+    Description: ARN of the Messages DynamoDB table
+    Value: !GetAtt MessagesTable.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-MessagesTableArn"
+
+  ProfileImagesBucketName:
+    Description: Name of the S3 bucket for profile images
+    Value: !Ref ProfileImagesBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-ProfileImagesBucket" 
