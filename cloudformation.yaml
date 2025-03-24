@@ -236,69 +236,147 @@ Resources:
           Value: !Sub ${EnvironmentName} Server
       UserData:
         Fn::Base64: !Sub |
-          #!/bin/bash -xe
-          # Update with latest packages
-          dnf update -y
-          dnf install -y git nodejs npm mongodb-org nginx
+          #!/bin/bash
+          # Redirect output to log file for debugging
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
-          # Install certbot
-          dnf install -y python3-pip
-          pip3 install certbot certbot-nginx
+          echo "Starting server initialization..."
+
+          # Update with latest packages - using apt for Ubuntu
+          echo "Updating packages..."
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update
+
+          # Install Node.js from NodeSource repository (for newer versions)
+          echo "Installing Node.js..."
+          sudo apt-get install -y ca-certificates curl gnupg
+          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          
+          # Verify node and npm are installed
+          node --version
+          npm --version
+
+          # Install git
+          echo "Installing git..."
+          sudo apt-get install -y git
+
+          # Install MongoDB properly for Ubuntu
+          echo "Installing MongoDB..."
+          sudo apt-get install -y gnupg
+          curl -fsSL https://pgp.mongodb.com/server-6.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-6.0.gpg --dearmor
+          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-org
+
+          # Start MongoDB
+          echo "Starting MongoDB..."
+          sudo systemctl start mongod || echo "Failed to start MongoDB"
+          sudo systemctl enable mongod || echo "Failed to enable MongoDB"
+          
+          # Verify MongoDB is running
+          sudo systemctl status mongod
+
+          # Install Nginx
+          echo "Installing Nginx..."
+          sudo apt-get install -y nginx
+          
+          # Verify Nginx is installed
+          nginx -v
 
           # Install PM2
-          npm install -g pm2
+          echo "Installing PM2..."
+          sudo npm install -g pm2
+          
+          # Verify PM2 is installed
+          pm2 --version
+
+          # Create app directory with correct permissions
+          echo "Setting up application directory..."
+          sudo mkdir -p /app
+          sudo chown ubuntu:ubuntu /app
+          cd /app
 
           # Clone the repository
-          mkdir -p /app
-          cd /app
-          git clone https://github.com/your-username/post-it.git .
+          echo "Cloning repository..."
+          git clone https://github.com/dajer93/post-it.git .
 
           # Install server dependencies
+          echo "Installing server dependencies..."
           cd /app/server
           npm install
 
           # Configure environment variables
-          cat > /app/server/.env << EOL
-          PORT=3000
+          echo "Configuring environment variables..."
+          # Store CloudFormation variables in shell variables first
+          STACK_NAME="${AWS::StackName}"
+          AWS_REGION_VAR="${AWS::Region}"
+          PROFILE_BUCKET_NAME="${ProfileImagesBucket}"
+          USERS_TABLE_NAME="${UsersTable}"
+          MESSAGES_TABLE_NAME="${MessagesTable}"
+          
+          # Now use the shell variables in the heredoc
+          cat > /app/server/.env << EOF
+          PORT=5001
           MONGODB_URI=mongodb://localhost:27017/postit
-          JWT_SECRET=${AWS::StackName}-jwt-secret
+          JWT_SECRET=$STACK_NAME-jwt-secret
           NODE_ENV=production
-          AWS_REGION=${AWS::Region}
-          PROFILE_BUCKET=${ProfileImagesBucket}
-          DYNAMO_USERS_TABLE=${UsersTable}
-          DYNAMO_MESSAGES_TABLE=${MessagesTable}
-          EOL
+          AWS_REGION=$AWS_REGION_VAR
+          PROFILE_BUCKET=$PROFILE_BUCKET_NAME
+          DYNAMO_USERS_TABLE=$USERS_TABLE_NAME
+          DYNAMO_MESSAGES_TABLE=$MESSAGES_TABLE_NAME
+          EOF
 
-          # Start MongoDB and enable it to launch on startup
-          systemctl start mongod
-          systemctl enable mongod
+          # Make sure MongoDB is running before starting the application
+          echo "Waiting for MongoDB to be fully started..."
+          sleep 10
 
           # Start the server with PM2
+          echo "Starting API server with PM2..."
           cd /app/server
-          pm2 start src/index.js --name "postit-server"
-          pm2 startup
-          pm2 save
+          pm2 start src/index.js --name "postit-server" || echo "Failed to start with PM2"
+          pm2 startup | sudo bash || echo "PM2 startup failed"
+          pm2 save || echo "PM2 save failed"
 
           # Configure Nginx as reverse proxy
-          cat > /etc/nginx/conf.d/postit.conf << EOL
+          echo "Configuring Nginx..."
+          sudo tee /etc/nginx/sites-available/postit > /dev/null << 'NGINXEOF'
           server {
             listen 80;
             server_name _;
 
             location / {
-              proxy_pass http://localhost:3000;
+              proxy_pass http://localhost:5001;
               proxy_http_version 1.1;
-              proxy_set_header Upgrade \$http_upgrade;
+              proxy_set_header Upgrade $http_upgrade;
               proxy_set_header Connection 'upgrade';
-              proxy_set_header Host \$host;
-              proxy_cache_bypass \$http_upgrade;
+              proxy_set_header Host $host;
+              proxy_cache_bypass $http_upgrade;
             }
           }
-          EOL
+          NGINXEOF
+
+          # Create sites-enabled directory if it doesn't exist
+          sudo mkdir -p /etc/nginx/sites-enabled/
 
           # Enable the Nginx site and restart
-          systemctl enable nginx
-          systemctl restart nginx
+          echo "Enabling Nginx site..."
+          sudo ln -sf /etc/nginx/sites-available/postit /etc/nginx/sites-enabled/ || echo "Failed to create symlink"
+          
+          # Remove default site if it exists
+          sudo rm -f /etc/nginx/sites-enabled/default
+          
+          # Test Nginx configuration
+          sudo nginx -t
+          
+          # Restart Nginx
+          sudo systemctl restart nginx || echo "Failed to restart Nginx"
+          sudo systemctl enable nginx || echo "Failed to enable Nginx"
+
+          echo "Server initialization completed! Check services status:"
+          systemctl status mongod --no-pager
+          systemctl status nginx --no-pager
+          pm2 status
 
 Outputs:
   ServerPublicIP:
