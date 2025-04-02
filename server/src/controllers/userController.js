@@ -18,7 +18,7 @@ const registerUser = async (req, res) => {
     console.log(req.body);
 
     // Check if user exists
-    const userExists = await User.findOne({ username });
+    const userExists = await User.findByUsername(username);
     if (userExists) {
       return res.status(400).json({ message: 'User already exists' });
     }
@@ -31,10 +31,10 @@ const registerUser = async (req, res) => {
 
     if (user) {
       res.status(201).json({
-        _id: user._id,
+        userId: user.userId,
         username: user.username,
         profilePicture: user.profilePicture,
-        token: generateToken(user._id),
+        token: generateToken(user.userId),
       });
     } else {
       res.status(400).json({ message: 'Invalid user data' });
@@ -53,22 +53,22 @@ const loginUser = async (req, res) => {
     const { username, password } = req.body;
 
     // Check for user
-    const user = await User.findOne({ username }).select('+password');
+    const user = await User.findByUsername(username);
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     // Check if password matches
-    const isMatch = await user.matchPassword(password);
+    const isMatch = await User.matchPassword(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     res.json({
-      _id: user._id,
+      userId: user.userId,
       username: user.username,
       profilePicture: user.profilePicture,
-      token: generateToken(user._id),
+      token: generateToken(user.userId),
     });
   } catch (error) {
     console.error(error);
@@ -81,11 +81,11 @@ const loginUser = async (req, res) => {
 // @access  Private
 const getUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.user.id);
 
     if (user) {
       res.json({
-        _id: user._id,
+        userId: user.userId,
         username: user.username,
         profilePicture: user.profilePicture,
       });
@@ -103,23 +103,26 @@ const getUserProfile = async (req, res) => {
 // @access  Private
 const updateUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.user.id);
 
     if (user) {
-      user.username = req.body.username || user.username;
-      user.profilePicture = req.body.profilePicture || user.profilePicture;
+      const updateData = {
+        username: req.body.username || user.username,
+        profilePicture: req.body.profilePicture || user.profilePicture,
+      };
 
+      // If password is provided, hash it
       if (req.body.password) {
-        user.password = req.body.password;
+        updateData.password = await User.hashPassword(req.body.password);
       }
 
-      const updatedUser = await user.save();
+      const updatedUser = await User.update(user.userId, updateData);
 
       res.json({
-        _id: updatedUser._id,
+        userId: updatedUser.userId,
         username: updatedUser.username,
         profilePicture: updatedUser.profilePicture,
-        token: generateToken(updatedUser._id),
+        token: generateToken(updatedUser.userId),
       });
     } else {
       res.status(404).json({ message: 'User not found' });

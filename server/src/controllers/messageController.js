@@ -13,11 +13,9 @@ const createMessage = async (req, res) => {
 
     const message = await Message.create({
       content,
-      location: {
-        type: 'Point',
-        coordinates: [longitude, latitude], // GeoJSON format is [longitude, latitude]
-      },
-      user: req.user._id,
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      user: req.user.id,
       username: req.user.username,
     });
 
@@ -43,18 +41,8 @@ const getNearbyMessages = async (req, res) => {
     const lat = parseFloat(latitude);
     const lng = parseFloat(longitude);
 
-    // Find messages within 100m radius
-    const messages = await Message.find({
-      location: {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: [lng, lat], // GeoJSON format is [longitude, latitude]
-          },
-          $maxDistance: 100, // 100 meters in meters
-        },
-      },
-    }).sort({ createdAt: -1 });
+    // Find messages within 100m radius using our model
+    const messages = await Message.findNearby(lat, lng, 100);
 
     res.json(messages);
   } catch (error) {
@@ -75,11 +63,11 @@ const deleteMessage = async (req, res) => {
     }
 
     // Check if the user owns the message
-    if (message.user.toString() !== req.user._id.toString()) {
+    if (message.userId !== req.user.id) {
       return res.status(401).json({ message: 'User not authorized' });
     }
 
-    await message.deleteOne();
+    await Message.deleteOne(message.messageId);
     res.json({ message: 'Message removed' });
   } catch (error) {
     console.error(error);

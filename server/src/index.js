@@ -1,13 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const connectDB = require('./config/db');
+const configureAWS = require('./config/db');
 
 // Load env vars
 dotenv.config();
 
-// Connect to database
-connectDB();
+// Configure AWS SDK
+configureAWS();
 
 // Route files
 const userRoutes = require('./routes/userRoutes');
