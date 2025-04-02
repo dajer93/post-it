@@ -1,9 +1,9 @@
 import React, { useState, useContext } from 'react';
-import { StyleSheet, View, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { StyleSheet, View, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { Button, Input, Text, Avatar, Card } from '@rneui/themed';
 import * as ImagePicker from 'expo-image-picker';
 import { AuthContext } from '../../src/context/AuthContext';
-import { updateUserProfile } from '../../src/api/auth';
+import { updateUserProfile, uploadProfilePicture } from '../../src/api/auth';
 
 export default function ProfileScreen() {
   const { userInfo, userToken, logout, updateUser } = useContext(AuthContext);
@@ -11,6 +11,7 @@ export default function ProfileScreen() {
   const [password, setPassword] = useState('');
   const [profilePicture, setProfilePicture] = useState(userInfo?.profilePicture || '');
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [error, setError] = useState(null);
 
   const pickImage = async () => {
@@ -26,16 +27,41 @@ export default function ProfileScreen() {
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.5,
-        base64: true,
+        quality: 0.7,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        setProfilePicture(`data:image/jpeg;base64,${result.assets[0].base64}`);
+        // Upload the image directly when selected
+        await uploadImage(result.assets[0].uri);
       }
     } catch (error) {
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image');
+    }
+  };
+
+  const uploadImage = async (imageUri) => {
+    try {
+      setIsUploadingImage(true);
+      setError(null);
+      
+      // Call the new upload function
+      const response = await uploadProfilePicture(imageUri, userToken);
+      
+      // Update user state with the S3 profile picture URL
+      setProfilePicture(response.profilePicture);
+      updateUser({
+        ...userInfo,
+        profilePicture: response.profilePicture
+      });
+      
+      Alert.alert('Success', 'Profile picture uploaded successfully');
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      setError(error.message || 'Failed to upload image');
+      Alert.alert('Error', 'Failed to upload profile picture');
+    } finally {
+      setIsUploadingImage(false);
     }
   };
 
@@ -51,9 +77,6 @@ export default function ProfileScreen() {
       }
       if (password) {
         updateData.password = password;
-      }
-      if (profilePicture !== userInfo.profilePicture) {
-        updateData.profilePicture = profilePicture;
       }
 
       // Only make API call if there are changes
@@ -87,20 +110,27 @@ export default function ProfileScreen() {
     <ScrollView style={styles.container}>
       <Card containerStyle={styles.card}>
         <View style={styles.avatarContainer}>
-          <TouchableOpacity onPress={pickImage}>
-            <Avatar
-              size={100}
-              rounded
-              source={
-                profilePicture
-                  ? { uri: profilePicture }
-                  : require('../../src/assets/default-avatar.png')
-              }
-              containerStyle={styles.avatar}
-            >
-              <Avatar.Accessory size={24} />
-            </Avatar>
+          <TouchableOpacity onPress={pickImage} disabled={isUploadingImage}>
+            {isUploadingImage ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#3f51b5" />
+              </View>
+            ) : (
+              <Avatar
+                size={100}
+                rounded
+                source={
+                  profilePicture
+                    ? { uri: profilePicture }
+                    : require('../../src/assets/default-avatar.png')
+                }
+                containerStyle={styles.avatar}
+              >
+                <Avatar.Accessory size={24} />
+              </Avatar>
+            )}
           </TouchableOpacity>
+          <Text style={styles.tapHint}>Tap to change profile picture</Text>
         </View>
 
         <Text h3 style={styles.username}>
@@ -162,6 +192,19 @@ const styles = StyleSheet.create({
   },
   avatar: {
     backgroundColor: '#e0e0e0',
+  },
+  loadingContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#e0e0e0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tapHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#666',
   },
   username: {
     textAlign: 'center',

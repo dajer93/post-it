@@ -1,4 +1,5 @@
 const { DynamoDBClient, ListTablesCommand } = require('@aws-sdk/client-dynamodb');
+const { S3Client } = require('@aws-sdk/client-s3');
 
 const configureAWS = () => {
   try {
@@ -19,8 +20,13 @@ const configureAWS = () => {
     // Create DynamoDB client
     const dynamoClient = new DynamoDBClient(clientConfig);
     
-    // Make DynamoDB client globally available
+    // Create S3 client
+    const s3Client = new S3Client(clientConfig);
+    
+    // Make clients globally available
     global.dynamoClient = dynamoClient;
+    global.s3Client = s3Client;
+    global.profileBucket = process.env.PROFILE_BUCKET || 'post-it-profile-pictures';
     
     // Verify DynamoDB connection
     const listTablesCommand = new ListTablesCommand({});
@@ -31,6 +37,8 @@ const configureAWS = () => {
       .catch(err => {
         console.error('Error connecting to DynamoDB:', err);
       });
+    
+    console.log('S3 Client configured for bucket:', global.profileBucket);
     
   } catch (error) {
     console.error(`Error configuring AWS: ${error.message}`);

@@ -89,4 +89,42 @@ export const updateUserProfile = async (userInfo, token) => {
   } catch (error) {
     throw new Error(error.message || 'Failed to update profile');
   }
+};
+
+// Upload profile picture to S3
+export const uploadProfilePicture = async (imageUri, token) => {
+  try {
+    // Convert base64 data URI to blob
+    const base64 = imageUri.split(',')[1];
+    const imageBlob = await fetch(imageUri).then(res => res.blob());
+    
+    // Create form data with the image
+    const formData = new FormData();
+    formData.append('profilePicture', {
+      uri: imageUri,
+      type: 'image/jpeg', 
+      name: 'profile-picture.jpg'
+    });
+
+    // Upload to the server
+    const response = await fetch(`${API_URL}/users/profile/picture`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to upload profile picture');
+    }
+
+    return data;
+  } catch (error) {
+    console.error('Error uploading profile picture:', error);
+    throw new Error(error.message || 'Failed to upload profile picture');
+  }
 }; 

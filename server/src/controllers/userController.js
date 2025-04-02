@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { uploadProfilePicture, deleteProfilePicture } = require('../utils/s3Utils');
 
 // Generate JWT
 const generateToken = (id) => {
@@ -133,9 +134,49 @@ const updateUserProfile = async (req, res) => {
   }
 };
 
+// @desc    Upload profile picture
+// @route   POST /api/users/profile/picture
+// @access  Private
+const uploadProfileImage = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'Please upload a file' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Delete the old profile picture if it exists
+    if (user.profilePicture) {
+      await deleteProfilePicture(user.profilePicture);
+    }
+
+    // Upload the new profile picture
+    const fileBuffer = req.file.buffer;
+    const contentType = req.file.mimetype;
+    const profilePictureUrl = await uploadProfilePicture(fileBuffer, user.userId, contentType);
+
+    // Update the user's profile picture
+    const updatedUser = await User.update(user.userId, { profilePicture: profilePictureUrl });
+
+    res.json({
+      userId: updatedUser.userId,
+      username: updatedUser.username,
+      profilePicture: updatedUser.profilePicture,
+      message: 'Profile picture updated successfully'
+    });
+  } catch (error) {
+    console.error('Error in uploadProfileImage:', error);
+    res.status(500).json({ message: 'Failed to upload profile picture' });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
   getUserProfile,
   updateUserProfile,
+  uploadProfileImage
 }; 
